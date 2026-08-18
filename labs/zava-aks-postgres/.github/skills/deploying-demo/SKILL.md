@@ -56,15 +56,33 @@ $ip = ($r.logs -replace '[^\d\.]','').Trim()
 
 ## Phase 3: Sync knowledge + verify SRE Agent
 
-The agent itself — connectors, custom skills, response plans, autonomous mode,
-Azure Monitor binding — is already provisioned by Bicep during `azd up`. This
-script uploads knowledge files, syncs the agent-global custom instructions,
-enables the Microsoft Learn MCP tools, and verifies the complete configuration.
+Deployment has two ownership phases:
+
+- **ARM/Bicep** deploys the agent, identities and RBAC, Azure Monitor incident
+  binding, and connectors.
+- **SRE Agent data plane** deploys the six custom skills and four response
+  plans from `sre-config/agent-extensions.psd1`, uploads knowledge, syncs
+  agent-global custom instructions, and enables Microsoft Learn MCP tools.
+
+`azd up` invokes the data-plane setup after ARM provisioning and verifies both
+owners. Exact skill and response-plan name sets are required; unexpected stale
+names fail verification.
 
 1. Get azd values: `$env:SRE_AGENT_ENDPOINT = azd env get-value SRE_AGENT_ENDPOINT` (and RESOURCE_GROUP, SRE_AGENT_NAME)
 2. Run: `.\scripts\setup-sre-agent.ps1` (auto-detects ResourceGroup and AgentName from `azd env`)
-3. If anything in Step 3's verification output reports `[MISSING]`, re-run
-   `azd provision` to converge the Bicep state.
+3. For `[MISSING]` ARM connectors/settings, rerun `azd provision`. For missing
+   data-plane skills/response plans/knowledge, rerun `setup-sre-agent.ps1`.
+4. For `[UNEXPECTED]` skills or response plans, remove the named retired item
+   in the SRE Agent Builder UI, then rerun setup.
+
+If token acquisition fails, the AKS/PostgreSQL workloads and agent may already
+be deployed because the failure occurs after ARM provisioning. Do not start
+over. Authenticate with the exact SRE Agent scope and rerun setup:
+
+```powershell
+az login --scope "https://azuresre.dev/.default"
+.\scripts\setup-sre-agent.ps1
+```
 
 ## Optional: confirm the agent is reachable
 

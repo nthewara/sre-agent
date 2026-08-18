@@ -91,12 +91,31 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2024-01-01' = {
   properties: {
     securityRules: [
       {
+        // ingress-nginx is intentionally public in this lab. Allow only its
+        // Internet-facing HTTP(S) ports; Kubernetes NodePorts remain blocked
+        // by the NSG's default DenyAllInBound rule.
+        name: 'allow-public-ingress-http-https'
+        properties: {
+          priority: 100
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: 'Internet'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRanges: [
+            '80'
+            '443'
+          ]
+        }
+      }
+      {
         // Intentionally permissive: this demo needs to reproduce egress patterns
         // (PostgreSQL on 5432, ACR pulls, ARM control plane). A locked-down NSG
         // would mask the failure modes the SRE Agent is supposed to diagnose —
         // Scenario 2 specifically depends on being able to add/remove a deny
-        // rule against this open baseline. Do NOT tighten without rewriting the
-        // break/fix scenarios.
+        // rule against this open egress baseline. Do NOT tighten without
+        // rewriting the break/fix scenarios.
         name: 'allow-all-outbound'
         properties: {
           priority: 1000
