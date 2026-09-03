@@ -2,7 +2,7 @@ using './main.bicep'
 
 var azdEnvironmentName = readEnvironmentVariable('AZURE_ENV_NAME', 'zava-aks-postgres')
 
-param location = 'swedencentral'
+param location = readEnvironmentVariable('AZURE_LOCATION', 'swedencentral')
 param resourceGroupName = readEnvironmentVariable('ZAVA_RG_NAME', 'rg-${azdEnvironmentName}')
 
 // AZD sets AZURE_ENV_NAME automatically (e.g. 'zava-oneshot-1514'). Read it

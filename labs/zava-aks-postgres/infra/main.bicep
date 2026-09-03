@@ -113,9 +113,12 @@ module identity 'modules/identity.bicep' = {
 // The principal ID is runtime-known. Pass it into a nested deployment so the
 // assignment name can be keyed to the actual principal rather than the reusable
 // identity name; that avoids RoleAssignmentUpdateNotPermitted after recreation.
+// The nested deployment name is also keyed to the top-level deployment name and
+// requested region. Subscription deployment names are location-bound, so a
+// static name cannot be safely retried in a different region.
 module correlationSubscriptionReader 'modules/subscription-reader.bicep' = {
   scope: subscription()
-  name: 'correlation-subscription-reader'
+  name: 'correlation-subscription-reader-${take(uniqueString(deployment().name, location), 8)}'
   params: {
     principalId: identity.outputs.sreAgentIdentityPrincipalId
   }

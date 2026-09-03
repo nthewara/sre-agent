@@ -11,6 +11,8 @@
     4. Install NGINX ingress controller
     5. Deploy K8s manifests with environment substitution
     6. Wait for pods and print endpoints
+    7. Synchronize required SRE Agent skills, response plans, and other
+       data-plane configuration
 .NOTES
     Requires: az CLI, azd. (kubectl is NOT required — all in-cluster ops run through `az aks command invoke`.)
     Run from the project root directory.
@@ -357,21 +359,16 @@ Write-Host "  API Health:   http://$ingressIP/api/health" -ForegroundColor White
 Write-Host "  API Products: http://$ingressIP/api/products" -ForegroundColor White
 Write-Host "  Diagnostics:  http://$ingressIP/api/diagnostics" -ForegroundColor White
 Write-Host ""
-Write-Host "  SRE Agent (already provisioned by Bicep above):" -ForegroundColor Yellow
-Write-Host "  - Agent + connectors + custom skills + response plans = Bicep" -ForegroundColor DarkGray
-Write-Host "  - Knowledge file upload + verification = setup-sre-agent.ps1 (next)" -ForegroundColor DarkGray
+Write-Host "  SRE Agent configuration:" -ForegroundColor Yellow
+Write-Host "  - Agent + identities + connectors = ARM/Bicep" -ForegroundColor DarkGray
+Write-Host "  - Skills + response plans + knowledge + verification = setup-sre-agent.ps1 (next)" -ForegroundColor DarkGray
 Write-Host "========================================" -ForegroundColor Cyan
 
-# === Knowledge file sync + verification ===
+# === SRE Agent data-plane sync + verification ===
 Write-Host "`n========================================" -ForegroundColor Cyan
-Write-Host "  Syncing knowledge + verifying agent" -ForegroundColor Cyan
+Write-Host "  Syncing agent extensions + knowledge" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
 
-$agentName = try { Get-AzdValue "SRE_AGENT_NAME" } catch { "" }
-if ($agentName) {
-    Write-Host "Running setup-sre-agent.ps1..." -ForegroundColor Yellow
-    & "$PSScriptRoot\setup-sre-agent.ps1" -ResourceGroup $RG -AgentName $agentName
-} else {
-    Write-Host "SRE_AGENT_NAME not set - skipping agent configuration." -ForegroundColor Yellow
-    Write-Host "Run scripts\setup-sre-agent.ps1 manually after creating the agent." -ForegroundColor Yellow
-}
+$agentName = Get-AzdValue "SRE_AGENT_NAME"
+Write-Host "Running setup-sre-agent.ps1..." -ForegroundColor Yellow
+& "$PSScriptRoot\setup-sre-agent.ps1" -ResourceGroup $RG -AgentName $agentName

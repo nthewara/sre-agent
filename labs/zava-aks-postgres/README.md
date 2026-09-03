@@ -22,6 +22,12 @@ The correlation skill reads subscription-wide alert and Service Health context,
 so the template grants its runtime identity the built-in Reader role there. The
 `predown` hook removes that assignment before deleting the resource group.
 
+`azd up` uses two configuration phases. ARM/Bicep provisions Azure resources and
+agent connectors, then the post-provision hook synchronizes skills, response plans,
+knowledge, and custom instructions through the SRE Agent data plane. That phase
+requires an Entra token whose audience is `https://azuresre.dev` and fails the
+deployment if the required skills or response plans cannot be synchronized.
+
 ## What You Get
 
 | Component | Details |
@@ -29,7 +35,7 @@ so the template grants its runtime identity the built-in Reader role there. The
 | **App** | Zava Athletic e-commerce storefront (Node.js/Express on AKS) |
 | **Database** | PostgreSQL 16 Flexible Server (Entra-only auth, zero passwords) |
 | **Monitoring** | App Insights, Log Analytics, OpenTelemetry application metrics, PostgreSQL platform metrics, and three dispatching Azure Monitor alerts: database availability, query performance, and application 5xx failures |
-| **SRE Agent** | Preview-channel agent with declarative connectors, skills, response plans, Azure Monitor incident binding, and global custom instructions. The source repository is deliberately not connected in this lab. |
+| **SRE Agent** | Preview-channel agent with ARM-declared connectors and Azure Monitor incident binding, plus idempotently synchronized data-plane skills, response plans, and global custom instructions. The source repository is deliberately not connected in this lab. |
 | **Telemetry access** | App Insights, Log Analytics, and Azure Monitor exposed via **connectors** |
 | **Demo Scenarios** | 5 break/fix scenarios with scripts |
 
@@ -155,15 +161,22 @@ rights remain limited to the demo resource group.
 
 ## SRE Agent Management
 
-Agent configuration is fully declarative in **`infra/modules/sre-agent.bicep`** —
-connectors, custom skills, response plans / incident filters, autonomous mode, and Azure
-Monitor incident binding all flow through `Microsoft.App/agents/*` ARM resources. To change
-them, edit the Bicep and run `azd provision`.
+Agent configuration is declarative but intentionally split across two APIs:
 
-Residual data-plane state is handled by `scripts/setup-sre-agent.ps1`: knowledge-file
-upload, the singleton agent-global custom instructions, and Microsoft Learn MCP tool
-enablement. The script also verifies the Bicep-deployed assets are live. Drop new
-`*.md` files into `sre-config/knowledge-base/` and re-run the script to sync.
+- **ARM/Bicep** in `infra/modules/sre-agent.bicep` creates the agent, identities,
+  autonomous mode, Azure Monitor incident binding, and connectors.
+- **SRE Agent data plane** in `scripts/setup-sre-agent.ps1` idempotently PUTs the
+  six skills and four response plans from `sre-config/agent-extensions.psd1` and
+  `sre-config/skills/`, then synchronizes knowledge files, custom instructions,
+  and Microsoft Learn MCP tool enablement.
+
+The split is required for public/external tenants: ARM child resources
+`Microsoft.App/agents/skills` and `Microsoft.App/agents/incidentFilters` are
+restricted to internal tenants. The post-provision script acquires
+`https://azuresre.dev` as the token audience without printing the token, retries
+bounded readiness failures, and fails explicitly if a required PUT does not
+succeed. Drop new `*.md` files into `sre-config/knowledge-base/` and re-run the
+script to sync.
 
 ## How the Agent Operates Against a Private Backend
 
@@ -353,8 +366,9 @@ zava-aks-postgres/
 │   ├── _aks-helpers.ps1          #   Invoke-AksCommand wrapper (REST fallback)
 │   ├── check-environment.ps1     #   azd preprovision hook
 │   ├── post-provision.ps1        #   azd postprovision hook
-│   └── setup-sre-agent.ps1       #   Knowledge file upload + verification
-└── sre-config/                   # Knowledge base files (skills, response plans, and connectors are declared in infra/modules/sre-agent.bicep)
+│   ├── _sre-agent-extensions.ps1 #   Data-plane payload + sync helpers
+│   └── setup-sre-agent.ps1       #   Skills/plans/knowledge sync + verification
+└── sre-config/                   # Data-plane skill, response-plan, knowledge, and custom-instruction sources
 ```
 
 ## License

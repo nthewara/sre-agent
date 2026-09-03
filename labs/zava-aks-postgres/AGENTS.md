@@ -9,7 +9,7 @@ Azure SRE Agent demo — AKS + PostgreSQL e-commerce app with break/fix scenario
 When a user clones this repo, guide them through setup:
 1. Check prerequisites: `az`, `azd`, `pwsh`, plus Owner/User Access Administrator (or equivalent role-assignment write permission) at subscription scope — install anything missing. (`kubectl` is **not** required on the operator workstation: the AKS cluster is private, operator operations use `az aks command invoke`, and the SRE Agent uses its built-in Kubernetes tools.)
 2. Run `azd up` — pick their default subscription, use `swedencentral` region
-3. After deploy completes, run `scripts/setup-sre-agent.ps1` to upload the knowledge file and verify the Bicep-deployed agent (the agent itself, connectors, skills, response plans, mode, incident binding are all already provisioned by Bicep — this script only handles the data-plane KB upload and a verification readout)
+3. `azd up` runs `scripts/setup-sre-agent.ps1` after ARM provisioning. The script idempotently synchronizes the required skills, response plans, knowledge, custom instructions, and global Learn tool state through the SRE Agent data plane, then verifies both phases. Re-run it directly to repair or verify agent configuration.
 4. Open the storefront in browser to verify it works
 5. Run a break scenario to demonstrate the SRE Agent
 
@@ -21,12 +21,13 @@ These are gotchas for someone editing this repo's IaC or Bicep — they're *not*
 
 - **K8s manifests** use `${VAR}` placeholders — substituted by `post-provision.ps1`, not Helm/Kustomize.
 - **No `azd deploy api`** — there's no `services:` block in `azure.yaml`. Container images are built by `post-provision.ps1` via `az acr build`. To iterate: `az acr build --registry $acr --image zava-api:latest ./src/api` then `az aks command invoke … kubectl rollout restart deployment …`.
+- **Subscription-scoped nested deployment names must be location-safe.** `correlationSubscriptionReader` derives its deployment name from the top-level deployment name and requested region. Do not replace it with a static name: Azure binds a subscription deployment name to its original location, so a later retry in another region conflicts before the idempotent role assignment can run.
 - **Activity log alerts default to Sev4** because `Microsoft.Insights/activityLogAlerts` rules don't expose a severity field for the categories we use (Administrative). Response plans must include `Sev4` in `priorities[]` (this repo includes all severities) or activity-log-driven incidents won't match.
 - **Response plans use three purpose-built routes and one bounded fallback.** `zava-database`, `zava-performance`, and `zava-application` run autonomously; `zava-unknown` handles other `Zava` alerts in Review mode. Keep filters mutually exclusive and explicitly exclude known routes from the fallback.
 - **The demo has three enabled dispatching alerts.** `postgres-unreachable` covers database availability, `Zava-products-query-slow` covers query performance, and `Zava-http-5xx-errors` covers application failures. Supporting metrics remain available for investigation even when they do not dispatch a separate alert.
 - **Dispatching scheduled-query alerts use `evaluationFrequency: PT5M`.** The deployed and validated contract for `postgres-unreachable`, `Zava-products-query-slow`, and `Zava-http-5xx-errors` is `PT5M` evaluation with a `PT5M` window. Keep new demo dispatching alerts aligned with that configuration.
 - **Both database scenarios use `postgres-unreachable`.** Diagnose a stopped server versus a network block from PostgreSQL ARM state and network configuration, not error text alone. The runbook closes the alert after verified recovery so repeat demo runs can dispatch a new investigation.
-- **Updating an existing deployment leaves orphans — incremental ARM doesn't delete removed resources.** A fresh `azd up` (new RG) is clean, but applying this on top of a prior deploy keeps the old alerts/filters/skills firing. Delete the retired ones: alerts `Zava-slow-response-time`, `Zava-nsg-change`, `Zava-nsg-rule-deleted`, `postgres-server-stopped`, `postgres-server-down`, `postgres-network-blocked`, and the OLD metric `Zava-http-5xx-errors` (it's now a scheduled query of the same name); incidentFilters `zava-db-response`, `zava-app-response`; skill `db-incident-investigation`.
+- **Incremental updates leave orphans.** Neither incremental ARM deployments nor the data-plane PUT sync delete removed resources. A fresh `azd up` (new RG) is clean, but applying this on top of a prior deploy keeps old alerts/filters/skills firing. Delete the retired ones: alerts `Zava-slow-response-time`, `Zava-nsg-change`, `Zava-nsg-rule-deleted`, `postgres-server-stopped`, `postgres-server-down`, `postgres-network-blocked`, and the OLD metric `Zava-http-5xx-errors` (it's now a scheduled query of the same name); incidentFilters `zava-db-response`, `zava-app-response`; skill `db-incident-investigation`.
 - **`PT3M` is an invalid `windowSize`** for Azure Monitor metric alerts — only `PT1M, PT5M, PT10M, PT15M, PT30M, PT45M, PT1H+` are accepted. Deployment fails with a misleading error.
 - **Scenario 3 is tuned for the demo dataset.** Its seed size, PostgreSQL cost setting, alert threshold, and load generator work together. Review the inline comments in `seed.js`, `logger.js`, `monitoring.bicep`, and the performance runbook before changing them.
 - **Scenario 3 drops both category indexes.** `fix-db-perf.ps1` recreates both indexes during cleanup.
@@ -36,7 +37,7 @@ These are gotchas for someone editing this repo's IaC or Bicep — they're *not*
 - **Scenario 5 (`break-compound.ps1`) is a bounded correlation proof of concept.** It overlaps Scenario 3 and Scenario 4 by 90 seconds so the sample can compare nearby alerts against dependency, deployment, and database telemetry. The causes are intentionally independent. Run the database-performance fault first because it restarts the API deployment; the bad-deploy revision must remain the latest rollout for the application investigation. Do not present this scenario as a comprehensive correlation benchmark or a guaranteed model outcome.
 - **Skills are split by incident domain.** Keep database, performance, application, general triage, proactive health, and correlation procedures separate. Domain skills may use the read-only correlation skill when needed.
 - **Alert `description` strings in `monitoring.bicep` are agent-readable payload, not cosmetic Bicep strings.** Azure Monitor includes the alert description in the incident context the SRE Agent reads. They MUST stay symptom-only — never re-add "Likely cause: …", "Remediation: …", "(Scenario N)", or any specific resource name (table, index, NetworkPolicy) the agent could pattern-match instead of diagnosing. The descriptions describe what was observed; the runbook + KB explain how to investigate.
-- **Correlation guidance is split between global instructions and an on-demand skill.** `sre-config/custom-instructions.md` identifies when a wider review may be useful; the `incident-correlation` skill in `sre-agent.bicep` contains the read-only procedure. Keep alert descriptions symptom-focused and avoid duplicating correlation instructions across response plans.
+- **Correlation guidance is split between global instructions and an on-demand skill.** `sre-config/custom-instructions.md` identifies when a wider review may be useful; `sre-config/skills/incident-correlation.md` contains the read-only procedure. Keep alert descriptions symptom-focused and avoid duplicating correlation instructions across response plans.
 - **Correlation requires mechanism evidence.** Alert timestamps identify candidate overlap but not causal order. Establish onset from raw telemetry and compare dependency targets, result codes, deployment history, and PostgreSQL metrics before assigning a shared cause.
 - **`Zava-db-cpu-saturation` is disabled by default (`enableDbCpuSaturationAlert=false`).** It supports the Scenario 5 demonstration of checking relevant disabled rules and querying their underlying metrics. Set the parameter to `true` to include the database CPU alert. Metric and scheduled-query rule inventories use different APIs, so the correlation skill checks both.
 - **Use Azure Service Health as a correlation source.** Query subscription events with `Microsoft.ResourceHealth/events` and per-resource state with `availabilityStatuses`. The correlation skill uses the list APIs supported by this sample.
@@ -67,9 +68,17 @@ For agents that support Copilot CLI's project-local skills under `.github/skills
 
 ## Data-plane configuration
 
-`scripts/setup-sre-agent.ps1` synchronizes the configuration not represented in
-the Bicep template: knowledge files, Microsoft Learn MCP tool enablement, and
+The deployment is deliberately two phase. ARM/Bicep creates the agent and
+connectors. `scripts/setup-sre-agent.ps1` then uses an Entra token for audience
+`https://azuresre.dev` to synchronize the six skills and four incident filters /
+response plans, knowledge files, Microsoft Learn MCP tool enablement, and
 agent-global custom instructions.
+
+Do not reintroduce `Microsoft.App/agents/skills` or
+`Microsoft.App/agents/incidentFilters` ARM children in the default template.
+Those extension types are restricted to internal tenants. Keep their source in
+`sre-config/agent-extensions.psd1` and `sre-config/skills/`; PUTs are idempotent,
+bounded, and required, so post-provision must fail when synchronization fails.
 
 The source of truth for custom instructions is
 [`sre-config/custom-instructions.md`](sre-config/custom-instructions.md). Keep
