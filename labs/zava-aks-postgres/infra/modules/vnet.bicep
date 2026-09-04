@@ -11,6 +11,20 @@ zones. The agent remains fully functional under this lockdown (Monitor queries, 
 incident remediation all work). See the main.bicep param doc.''')
 param lockAgentToPrivateMonitor bool = true
 
+@allowed(['Basic', 'Standard'])
+@description('''Azure Firewall SKU tier (default Basic).
+Basic (~$296/month) is sufficient for this lab: application-rule FQDN filtering, network rules with
+IP/service-tag destinations, SNAT/DNAT, and logging all work. Throughput ceiling is 250 Mbps - far
+above observed lab traffic (~90 kbps). Basic does NOT support DNS proxy, threat-intel Deny mode,
+network-rule FQDN filtering, or web categories.
+Standard (~$916/month) adds DNS proxy (enables AZFWDnsQuery logs), threat-intel Deny, network-rule
+FQDN filtering, and web categories.
+Override: `azd env set FIREWALL_SKU Standard` before `azd up`.''')
+param firewallSku string = 'Basic'
+
+// Helper for SKU-conditional logic throughout this module.
+var isBasicFirewall = firewallSku == 'Basic'
+
 // ===========================================================================
 // Hub-and-spoke network for the SRE Agent demo
 // ===========================================================================
@@ -23,6 +37,9 @@ param lockAgentToPrivateMonitor bool = true
 //     ├─ AzureFirewallSubnet        10.10.0.0/26   Azure Firewall — the single egress
 //     │                                            point AND the "network device" the
 //     │                                            agent interrogates (see below).
+//     ├─ AzureFirewallManagementSubnet 10.10.0.64/26 Required by Basic SKU for the
+//     │                                            management NIC + public IP. Present
+//     │                                            but unused when Standard is selected.
 //     ├─ GatewaySubnet              10.10.1.0/27   RESERVED for an ExpressRoute/VPN
 //     │                                            gateway (hub→on-prem). Not deployed:
 //     │                                            a real ExpressRoute circuit must be
@@ -171,6 +188,16 @@ resource hubVnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
         name: 'AzureFirewallSubnet'
         properties: {
           addressPrefix: '10.10.0.0/26'
+        }
+      }
+      {
+        // Required exact name for Azure Firewall Basic: the management NIC lands
+        // here (Basic requires a dedicated management subnet + public IP). /26 is
+        // the minimum. Harmless when Standard is selected - just an empty subnet.
+        // No route table may be associated with this subnet.
+        name: 'AzureFirewallManagementSubnet'
+        properties: {
+          addressPrefix: '10.10.0.64/26'
         }
       }
       {
@@ -411,18 +438,37 @@ resource firewallPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
   }
 }
 
-// Firewall policy: default-deny egress with a precise allow-list. DNS proxy is on
-// so the firewall resolves FQDNs for the application rules. Threat intel denies
-// known-bad destinations.
+// Management public IP — required by Basic SKU (the management NIC needs its own
+// Standard static PIP). Not deployed when Standard is selected.
+resource firewallMgmtPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (isBasicFirewall) {
+  name: 'afw-mgmt-pip-Zava-${uniqueSuffix}'
+  location: location
+  sku: {
+    name: 'Standard'
+    tier: 'Regional'
+  }
+  properties: {
+    publicIPAllocationMethod: 'Static'
+  }
+}
+
+// Firewall policy: default-deny egress with a precise allow-list. Threat intel
+// denies known-bad destinations on Standard; Basic supports Alert only. DNS proxy
+// is enabled only on Standard (Basic does not support it).
 resource firewallPolicy 'Microsoft.Network/firewallPolicies@2024-05-01' = {
   name: 'afw-policy-Zava-${uniqueSuffix}'
   location: location
   properties: {
-    sku: { tier: 'Standard' }
-    dnsSettings: {
-      enableProxy: true
-    }
-    threatIntelMode: 'Deny'
+    sku: { tier: firewallSku }
+    // DNS proxy is a Standard-only feature. On Basic the property must be omitted;
+    // setting enableProxy on a Basic policy fails deployment.
+    ...(isBasicFirewall ? {} : {
+      dnsSettings: {
+        enableProxy: true
+      }
+    })
+    // Basic supports Alert only; Standard can Deny known-bad destinations.
+    threatIntelMode: isBasicFirewall ? 'Alert' : 'Deny'
     // SNAT all traffic, including private destinations. This supports the
     // private AKS API-server network path: the API
     // server's NSG only admits the `VirtualNetwork` service tag, and the agent
@@ -604,8 +650,8 @@ resource ruleCollectionGroup 'Microsoft.Network/firewallPolicies/ruleCollectionG
             // shows "no active connection" and surfaces zero tools — even though
             // learn.microsoft.com itself is reachable. Scoped to the single host the
             // agent actually hits (verified in AZFWApplicationRule denials) — no
-            // *.githubusercontent.com wildcard. This is a Standard firewall, so L7
-            // matching is FQDN/SNI only; to pin the exact repo PATH
+            // *.githubusercontent.com wildcard. Both Basic and Standard firewalls do
+            // L7 matching by FQDN/SNI only; to pin the exact repo PATH
             // (raw.githubusercontent.com/microsoftdocs/mcp/*) you'd need Azure
             // Firewall Premium + TLS inspection (targetUrls). See README caveats.
             description: 'GitHub raw content — the Microsoft Learn MCP connector fetches its server bits here to complete the tool-discovery handshake'
@@ -627,7 +673,7 @@ resource firewall 'Microsoft.Network/azureFirewalls@2024-05-01' = {
   properties: {
     sku: {
       name: 'AZFW_VNet'
-      tier: 'Standard'
+      tier: firewallSku
     }
     firewallPolicy: { id: firewallPolicy.id }
     ipConfigurations: [
@@ -639,6 +685,17 @@ resource firewall 'Microsoft.Network/azureFirewalls@2024-05-01' = {
         }
       }
     ]
+    // Basic SKU requires a dedicated management NIC (AzureFirewallManagementSubnet +
+    // its own Standard public IP). Standard does not use it.
+    ...(isBasicFirewall ? {
+      managementIpConfiguration: {
+        name: 'fw-mgmt-ipconfig'
+        properties: {
+          subnet: { id: '${hubVnet.id}/subnets/AzureFirewallManagementSubnet' }
+          publicIPAddress: { id: firewallMgmtPip.id }
+        }
+      }
+    } : {})
   }
   dependsOn: [
     ruleCollectionGroup

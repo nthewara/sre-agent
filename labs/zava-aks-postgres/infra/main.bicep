@@ -31,6 +31,16 @@ data-plane config strictly operator/CI-applied. The firewall module remains depl
 rule collection when false so incremental deployments revoke previously granted access.''')
 param allowAgentSelfManagement bool = true
 
+@allowed(['Basic', 'Standard'])
+@description('''Azure Firewall SKU tier (default Basic).
+Basic (~$296/month) covers this lab: application-rule FQDN filtering, network rules with IP/service-tag
+destinations, SNAT/DNAT, logging, and up to 250 Mbps throughput (lab traffic is ~90 kbps).
+Basic does NOT support DNS proxy (no AZFWDnsQuery logs), threat-intel Deny mode, network-rule FQDN
+filtering, or web categories. Threat intel runs in Alert mode on Basic.
+Standard (~$916/month) adds DNS proxy, threat-intel Deny, network-rule FQDN filtering, and web
+categories. Override: `azd env set FIREWALL_SKU Standard` before `azd up`.''')
+param firewallSku string = 'Basic'
+
 // 4-char hash of the env name appended to the SRE Agent name. Empty when
 // environmentName is blank (e.g. raw `az deployment sub create`), preserving
 // the legacy `sre-agent-${uniqueSuffix}` shape for that path.
@@ -48,6 +58,7 @@ module vnet 'modules/vnet.bicep' = {
     location: location
     uniqueSuffix: uniqueSuffix
     lockAgentToPrivateMonitor: lockAgentToPrivateMonitor
+    firewallSku: firewallSku
   }
 }
 

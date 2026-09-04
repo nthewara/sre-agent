@@ -45,8 +45,10 @@ deployment if the required skills or response plans cannot be synchronized.
 Azure Resource Group (single RG — `azd down` cleans everything)
 
 HUB VNet  10.10.0.0/22   (shared edge / security)
-  ├─ Azure Firewall — the agent's single egress point AND the "network device"
+  ├─ Azure Firewall (Basic default, ~$296/mo; Standard ~$916/mo via override)
+  │    — the agent's single egress point AND the "network device"
   │    it interrogates: read its policy/rules over ARM, query AZFW* logs via KQL
+  ├─ AzureFirewallManagementSubnet  (Basic SKU management NIC; unused on Standard)
   ├─ GatewaySubnet      (reserved → ExpressRoute / VPN gateway to on-prem)
   └─ Private Endpoint → Azure Monitor Private Link Scope (AMPLS)
         ▲                                         ▲
@@ -237,7 +239,7 @@ Skills that need Kubernetes list `RunKubectlReadCommand` and, when remediation o
 
 The network is modeled as **hub-and-spoke**, the shape most enterprises actually run (and the one Azure CAF / Azure Verified Modules' `hub-networking` pattern codifies):
 
-- **Hub VNet** (`vnet-Zava-hub-*`, 10.10.0.0/22) holds the shared **Azure Firewall** (the agent's single egress point), a reserved **`GatewaySubnet`** where an **ExpressRoute/VPN gateway** to on-prem would attach, and the **Azure Monitor Private Link Scope (AMPLS)** private endpoint.
+- **Hub VNet** (`vnet-Zava-hub-*`, 10.10.0.0/22) holds the shared **Azure Firewall** (Basic by default - override with `azd env set FIREWALL_SKU Standard`; the agent's single egress point), an **`AzureFirewallManagementSubnet`** (required by Basic's management NIC; unused on Standard), a reserved **`GatewaySubnet`** where an **ExpressRoute/VPN gateway** to on-prem would attach, and the **Azure Monitor Private Link Scope (AMPLS)** private endpoint.
 - **Platform spoke** (`vnet-Zava-platform-*`, 10.20.0.0/16) holds the workload — AKS + PostgreSQL.
 - **Agent spoke** (`vnet-Zava-agent-*`, 10.30.0.0/24) holds the VNet-injected SRE Agent in `agent-subnet` (`10.30.0.0/27`). `/27` is the minimum: after Azure reserves five addresses, 27 usable addresses remain. Its egress is force-tunneled to the hub firewall over VNet peering (UDR `0.0.0.0/0` → firewall).
 
@@ -252,7 +254,7 @@ All with the agent's own managed identity (no elevation):
 | Path | How | What it answers |
 |---|---|---|
 | **Direct (config)** | `az network firewall [policy] show/list` — covered by the agent's Reader role | the device's *configuration*: rule collections, NAT rules, threat-intel mode |
-| **Indirect (telemetry)** | KQL on `AZFWNetworkRule`, `AZFWApplicationRule`, `AZFWNatRule`, `AZFWDnsQuery` (firewall diagnostics → Log Analytics, resource-specific tables) | what the device *observed*: actual allow/deny events, top blocked FQDNs/IPs |
+| **Indirect (telemetry)** | KQL on `AZFWNetworkRule`, `AZFWApplicationRule`, `AZFWNatRule`, `AZFWThreatIntel` (firewall diagnostics -> Log Analytics, resource-specific tables). `AZFWDnsQuery` is populated only on Standard (DNS proxy is a Standard-only feature). | what the device *observed*: actual allow/deny events, top blocked FQDNs/IPs |
 
 > **Network Watcher (optional, not wired in).** For deeper connectivity diagnostics you can add Azure Network Watcher — active `az network watcher` probes (connectivity check, next-hop, IP-flow verify, security-group view) plus NSG/VNet flow logs you can query with KQL. It's a standard Azure resource; to enable it, grant the agent a role on the regional `NetworkWatcherRG` (where the probes execute) and/or route flow logs to Log Analytics. It's left out by default to keep the footprint and cost minimal.
 
@@ -291,7 +293,7 @@ The Log Analytics workspace and Application Insights are scoped to an **Azure Mo
 
 ### Deploying in a hardened / enterprise tenant
 
-This demo targets a permissive dev/sandbox subscription and works there as-is: it ships a Standard Azure Firewall with a public IP, a Basic ACR, AKS with local accounts enabled, and default public network access on the Log Analytics workspace / Application Insights (PostgreSQL is already VNet-integrated, with no public endpoint). A locked-down corporate landing zone with strict Azure Policy would likely require hardening those: `disableLocalAccounts` on AKS, a Premium ACR with a private endpoint, `publicNetworkAccess: 'Disabled'` on the workspace/App Insights, and a policy exemption for the firewall public IP. That hardened path isn't validated here.
+This demo targets a permissive dev/sandbox subscription and works there as-is: it ships an Azure Firewall (Basic by default; Standard via `azd env set FIREWALL_SKU Standard`) with a public IP, a Basic ACR, AKS with local accounts enabled, and default public network access on the Log Analytics workspace / Application Insights (PostgreSQL is already VNet-integrated, with no public endpoint). A locked-down corporate landing zone with strict Azure Policy would likely require hardening those: `disableLocalAccounts` on AKS, a Premium ACR with a private endpoint, `publicNetworkAccess: 'Disabled'` on the workspace/App Insights, and a policy exemption for the firewall public IP. That hardened path isn't validated here.
 
 > **`disableLocalAccounts` and the SRE Agent.** Kubernetes operations use the built-in `RunKubectl*` system tools and the agent's existing AKS RBAC grant.
 
@@ -328,7 +330,7 @@ demo resources.
 The `learn-docs` connector is a no-auth remote **Streamable-HTTP** MCP server for Microsoft Learn (`https://learn.microsoft.com/api/mcp`). The neutral ARM name avoids `azd`'s generic reserved-word warning for names containing `microsoft`; it does not change the service or endpoint. Its three tools are selected in Bicep and it routes **entirely through the hub Azure Firewall** — no platform bypass. Three non-obvious things:
 
 0. **No platform escape hatch (`allowHttpMcpServerNetworkAccess: false`).** Left at its default-off on purpose. When `true`, the platform routes the MCP runtime endpoint as `Rewrite{RoutingMode=Platform}` — a broker that egresses *outside* the VNet, bypassing this firewall (it never even appears in the `AZFW*` logs). With it off, the MCP host falls under AzureVNet's default-Allow and egresses via the VNet → forced-tunnel → the firewall, so the runtime stream to `learn.microsoft.com` is gated by **our** allow-list like everything else — consistent with the lockdown thesis. (The only true pod-side bypass is the platform `ExperimentalSettings.HttpMcpInSandbox` flag, which defaults to the locked-down in-sandbox broker and isn't exposed here.)
-1. **Its server bits come from GitHub raw.** The in-sandbox `mcp-broker` fetches the connector's server bits from `raw.githubusercontent.com` (the `microsoftdocs/mcp` repo) during the `tools/list` handshake. The firewall therefore allow-lists `raw.githubusercontent.com` (`allow-github-raw-mcp-bits` in `vnet.bicep`). Without it the connector provisions but shows *"no active connection"* with **zero tools**, even though `learn.microsoft.com` itself is reachable (a raw GET to `/api/mcp` returns `405` "use a streamable HTTP transport"). The connection idle-disconnects and re-handshakes, so the rule is needed durably, not just on first use. It's scoped to that single host — this is a **Standard** firewall, which matches FQDN/SNI only; pinning the exact repo path (`raw.githubusercontent.com/microsoftdocs/mcp/*`) would require Azure Firewall **Premium** + TLS inspection (`targetUrls`).
+1. **Its server bits come from GitHub raw.** The in-sandbox `mcp-broker` fetches the connector's server bits from `raw.githubusercontent.com` (the `microsoftdocs/mcp` repo) during the `tools/list` handshake. The firewall therefore allow-lists `raw.githubusercontent.com` (`allow-github-raw-mcp-bits` in `vnet.bicep`). Without it the connector provisions but shows *"no active connection"* with **zero tools**, even though `learn.microsoft.com` itself is reachable (a raw GET to `/api/mcp` returns `405` "use a streamable HTTP transport"). The connection idle-disconnects and re-handshakes, so the rule is needed durably, not just on first use. It's scoped to that single host - both Basic and Standard firewalls do L7 matching by FQDN/SNI only; pinning the exact repo path (`raw.githubusercontent.com/microsoftdocs/mcp/*`) would require Azure Firewall **Premium** + TLS inspection (`targetUrls`).
 2. **MCP tools ship disabled (skill-gated).** MCP connector tools have `defaultMode: disabled` — they only surface when an incident skill that lists them is active. There is **no ARM/Bicep property** for per-tool enablement (the agent's `permissions` stays `null`), so `scripts/setup-sre-agent.ps1` (run post-provision) turns the three Learn tools on for the **global** roster via `POST /api/v2/agent/tools/configure` (`{overrides:[{name,enabled}]}`, merge semantics). Microsoft's own `srectl tool config set` CLI exists for exactly this gap.
 
 ## Prerequisites
