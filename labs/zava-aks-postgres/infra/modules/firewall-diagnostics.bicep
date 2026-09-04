@@ -15,8 +15,9 @@ param logAnalyticsWorkspaceId string
 //   AZFWNetworkRule      — L4 allow/deny per network rule
 //   AZFWApplicationRule  — L7 FQDN allow/deny per application rule
 //   AZFWNatRule          — DNAT rule hits
-//   AZFWDnsQuery         — DNS proxy queries
-//   AZFWThreatIntel      — threat-intel deny hits
+//   AZFWDnsQuery         — DNS proxy queries (Standard only; Basic does not
+//                          support DNS proxy, so this table stays empty on Basic)
+//   AZFWThreatIntel      — threat-intel hits (Alert on Basic, Deny on Standard)
 //
 // logAnalyticsDestinationType: 'Dedicated' makes the firewall write these
 // resource-specific (AZFW*) tables instead of the generic AzureDiagnostics blob,

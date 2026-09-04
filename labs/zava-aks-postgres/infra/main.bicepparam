@@ -10,3 +10,7 @@ param resourceGroupName = readEnvironmentVariable('ZAVA_RG_NAME', 'rg-${azdEnvir
 // When deploying without azd (raw `az deployment sub create`), this falls back
 // to '' and the agent name keeps its legacy `sre-agent-${uniqueSuffix}` shape.
 param environmentName = azdEnvironmentName
+
+// Azure Firewall SKU: Basic (default, ~$296/month) or Standard (~$916/month).
+// Override with `azd env set FIREWALL_SKU Standard` before `azd up`.
+param firewallSku = readEnvironmentVariable('FIREWALL_SKU', 'Basic')

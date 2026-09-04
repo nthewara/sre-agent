@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "18288269875575340593"
+      "templateHash": "6101346551307134218"
     }
   },
   "parameters": {
@@ -50,6 +50,17 @@
       "metadata": {
         "description": "Allow the agent to reach its OWN data-plane endpoint (`*.azuresre.ai`) through the hub\nfirewall, default true. Required for the agent to read or write the configuration surfaces ARM does not\nexpose — custom instructions, hooks, knowledge files, and global tool enablement. This is also a\nself-modification path (the agent can rewrite its own skills and always-on prompts); set false to keep\ndata-plane config strictly operator/CI-applied. The firewall module remains deployed with an empty\nrule collection when false so incremental deployments revoke previously granted access."
       }
+    },
+    "firewallSku": {
+      "type": "string",
+      "defaultValue": "Basic",
+      "allowedValues": [
+        "Basic",
+        "Standard"
+      ],
+      "metadata": {
+        "description": "Azure Firewall SKU tier (default Basic).\nBasic (~$296/month) covers this lab: application-rule FQDN filtering, network rules with IP/service-tag\ndestinations, SNAT/DNAT, logging, and up to 250 Mbps throughput (lab traffic is ~90 kbps).\nBasic does NOT support DNS proxy (no AZFWDnsQuery logs), threat-intel Deny mode, network-rule FQDN\nfiltering, or web categories. Threat intel runs in Alert mode on Basic.\nStandard (~$916/month) adds DNS proxy, threat-intel Deny, network-rule FQDN filtering, and web\ncategories. Override: `azd env set FIREWALL_SKU Standard` before `azd up`."
+      }
     }
   },
   "variables": {
@@ -81,6 +92,9 @@
           },
           "lockAgentToPrivateMonitor": {
             "value": "[parameters('lockAgentToPrivateMonitor')]"
+          },
+          "firewallSku": {
+            "value": "[parameters('firewallSku')]"
           }
         },
         "template": {
@@ -90,7 +104,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "10930383186374764832"
+              "templateHash": "6159397744192954705"
             }
           },
           "parameters": {
@@ -112,9 +126,21 @@
               "metadata": {
                 "description": "Lock the agent to PRIVATE-ONLY Azure Monitor (default true). When true, the public\n`AzureMonitor` service tag is dropped from the firewall L4 allow-list and the agent reaches Monitor\nvia the AMPLS private endpoint (10.10.2.0/27, rule allow-agent-to-ampls) + the linked private-DNS\nzones. The agent remains fully functional under this lockdown (Monitor queries, Kubernetes tools, and\nincident remediation all work). See the main.bicep param doc."
               }
+            },
+            "firewallSku": {
+              "type": "string",
+              "defaultValue": "Basic",
+              "allowedValues": [
+                "Basic",
+                "Standard"
+              ],
+              "metadata": {
+                "description": "Azure Firewall SKU tier (default Basic).\nBasic (~$296/month) is sufficient for this lab: application-rule FQDN filtering, network rules with\nIP/service-tag destinations, SNAT/DNAT, and logging all work. Throughput ceiling is 250 Mbps - far\nabove observed lab traffic (~90 kbps). Basic does NOT support DNS proxy, threat-intel Deny mode,\nnetwork-rule FQDN filtering, or web categories.\nStandard (~$916/month) adds DNS proxy (enables AZFWDnsQuery logs), threat-intel Deny, network-rule\nFQDN filtering, and web categories.\nOverride: `azd env set FIREWALL_SKU Standard` before `azd up`."
+              }
             }
           },
           "variables": {
+            "isBasicFirewall": "[equals(parameters('firewallSku'), 'Basic')]",
             "hubVnetName": "[format('vnet-Zava-hub-{0}', parameters('uniqueSuffix'))]",
             "platformVnetName": "[format('vnet-Zava-platform-{0}', parameters('uniqueSuffix'))]",
             "agentVnetName": "[format('vnet-Zava-agent-{0}', parameters('uniqueSuffix'))]",
@@ -197,6 +223,12 @@
                     "name": "AzureFirewallSubnet",
                     "properties": {
                       "addressPrefix": "10.10.0.0/26"
+                    }
+                  },
+                  {
+                    "name": "AzureFirewallManagementSubnet",
+                    "properties": {
+                      "addressPrefix": "10.10.0.64/26"
                     }
                   },
                   {
@@ -382,24 +414,25 @@
               }
             },
             {
+              "condition": "[variables('isBasicFirewall')]",
+              "type": "Microsoft.Network/publicIPAddresses",
+              "apiVersion": "2024-05-01",
+              "name": "[format('afw-mgmt-pip-Zava-{0}', parameters('uniqueSuffix'))]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "Standard",
+                "tier": "Regional"
+              },
+              "properties": {
+                "publicIPAllocationMethod": "Static"
+              }
+            },
+            {
               "type": "Microsoft.Network/firewallPolicies",
               "apiVersion": "2024-05-01",
               "name": "[format('afw-policy-Zava-{0}', parameters('uniqueSuffix'))]",
               "location": "[parameters('location')]",
-              "properties": {
-                "sku": {
-                  "tier": "Standard"
-                },
-                "dnsSettings": {
-                  "enableProxy": true
-                },
-                "threatIntelMode": "Deny",
-                "snat": {
-                  "privateRanges": [
-                    "255.255.255.255/32"
-                  ]
-                }
-              }
+              "properties": "[shallowMerge(createArray(createObject('sku', createObject('tier', parameters('firewallSku'))), if(variables('isBasicFirewall'), createObject(), createObject('dnsSettings', createObject('enableProxy', true()))), createObject('threatIntelMode', if(variables('isBasicFirewall'), 'Alert', 'Deny'), 'snat', createObject('privateRanges', createArray('255.255.255.255/32')))))]"
             },
             {
               "type": "Microsoft.Network/firewallPolicies/ruleCollectionGroups",
@@ -600,29 +633,9 @@
               "apiVersion": "2024-05-01",
               "name": "[format('afw-Zava-{0}', parameters('uniqueSuffix'))]",
               "location": "[parameters('location')]",
-              "properties": {
-                "sku": {
-                  "name": "AZFW_VNet",
-                  "tier": "Standard"
-                },
-                "firewallPolicy": {
-                  "id": "[resourceId('Microsoft.Network/firewallPolicies', format('afw-policy-Zava-{0}', parameters('uniqueSuffix')))]"
-                },
-                "ipConfigurations": [
-                  {
-                    "name": "fw-ipconfig",
-                    "properties": {
-                      "subnet": {
-                        "id": "[format('{0}/subnets/AzureFirewallSubnet', resourceId('Microsoft.Network/virtualNetworks', variables('hubVnetName')))]"
-                      },
-                      "publicIPAddress": {
-                        "id": "[resourceId('Microsoft.Network/publicIPAddresses', format('afw-pip-Zava-{0}', parameters('uniqueSuffix')))]"
-                      }
-                    }
-                  }
-                ]
-              },
+              "properties": "[shallowMerge(createArray(createObject('sku', createObject('name', 'AZFW_VNet', 'tier', parameters('firewallSku')), 'firewallPolicy', createObject('id', resourceId('Microsoft.Network/firewallPolicies', format('afw-policy-Zava-{0}', parameters('uniqueSuffix')))), 'ipConfigurations', createArray(createObject('name', 'fw-ipconfig', 'properties', createObject('subnet', createObject('id', format('{0}/subnets/AzureFirewallSubnet', resourceId('Microsoft.Network/virtualNetworks', variables('hubVnetName')))), 'publicIPAddress', createObject('id', resourceId('Microsoft.Network/publicIPAddresses', format('afw-pip-Zava-{0}', parameters('uniqueSuffix')))))))), if(variables('isBasicFirewall'), createObject('managementIpConfiguration', createObject('name', 'fw-mgmt-ipconfig', 'properties', createObject('subnet', createObject('id', format('{0}/subnets/AzureFirewallManagementSubnet', resourceId('Microsoft.Network/virtualNetworks', variables('hubVnetName')))), 'publicIPAddress', createObject('id', resourceId('Microsoft.Network/publicIPAddresses', format('afw-mgmt-pip-Zava-{0}', parameters('uniqueSuffix'))))))), createObject())))]",
               "dependsOn": [
+                "[resourceId('Microsoft.Network/publicIPAddresses', format('afw-mgmt-pip-Zava-{0}', parameters('uniqueSuffix')))]",
                 "[resourceId('Microsoft.Network/publicIPAddresses', format('afw-pip-Zava-{0}', parameters('uniqueSuffix')))]",
                 "[resourceId('Microsoft.Network/firewallPolicies', format('afw-policy-Zava-{0}', parameters('uniqueSuffix')))]",
                 "[resourceId('Microsoft.Network/virtualNetworks', variables('hubVnetName'))]",
