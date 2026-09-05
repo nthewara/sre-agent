@@ -30,7 +30,7 @@ positively scoped and explicitly exclude every known route.
 
 `scripts/setup-sre-agent.ps1` owns:
 
-- **Custom skills** — the six definitions in
+- **Custom skills** - the seven definitions in
   `sre-config/agent-extensions.psd1`, with markdown bodies under
   `sre-config/skills/`
 - **Response plans / incident filters** — `zava-database`,
@@ -44,6 +44,22 @@ Run the synchronizer after ARM provisioning:
 ```powershell
 .\scripts\setup-sre-agent.ps1
 ```
+
+For an existing, correctly provisioned agent, a skill update does not require
+Bicep or workload redeployment. Setup synchronizes all repository-managed
+skills, response plans, knowledge, global instructions, and Learn tool state,
+not just the changed skill. Match source to the deployed environment and
+review portal customizations before running it. Pass `-SubscriptionId`,
+`-ResourceGroup`, and `-AgentName` explicitly when not relying on an azd
+environment.
+
+The separate `daily-health-report` skill does not create or enable a scheduled
+task or custom responder. Follow the operator-managed
+[daily reporting workflow](../../../docs/daily-health-check.md) for a dedicated
+responder, fixed scope, Review-mode testing, and optional notification consent.
+Keep the reporting skill read-only and separate from `proactive-health-check`
+and incident remediation. Do not add `SendOutlookEmail` before interactive
+OAuth consent; the unconsented tool can prevent skill loading.
 
 PUTs use a bounded readiness retry budget. Verification requires the exact
 declared skill and incident-filter name sets, so retired remote entries are a
@@ -100,8 +116,9 @@ response plan in the SRE Agent Builder UI, then rerun setup. If it reports
 5. **Activity-log alerts gotcha** — they fire as Sev4 regardless of the configured
    severity, so response plan filters must match all severities
    (`agent-extensions.psd1` already does).
-6. **Runbook philosophy** — the six skills (`database-incidents`, `performance-incidents`,
-   `application-incidents`, `general-triage`, `proactive-health-check`, `incident-correlation`) declared by
+6. **Runbook philosophy** - the seven skills (`database-incidents`, `performance-incidents`,
+   `application-incidents`, `general-triage`, `proactive-health-check`,
+   `incident-correlation`, `daily-health-report`) declared by
    `agent-extensions.psd1`
    state the facts the agent can't infer (the RBAC it holds, what each alert means, which
    table to look at) — e.g. the `database-incidents` runbook's `postgres-unreachable` triage

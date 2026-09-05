@@ -67,6 +67,16 @@
             ContentFile = 'skills/proactive-health-check.md'
         }
         @{
+            Name = 'daily-health-report'
+            Description = 'Use for a scheduled or on-demand Zava daily health digest. Always return a read-only Markdown report for the previous 24 hours and current last 15 minutes, including healthy, needs-attention, or unknown status, evidence freshness, coverage gaps, and human follow-ups. Never remediate, delegate, or complete silently.'
+            Tools = @(
+                'RunAzCliReadCommands'
+                'RunKubectlReadCommand'
+                'SearchMemory'
+            )
+            ContentFile = 'skills/daily-health-report.md'
+        }
+        @{
             Name = 'incident-correlation'
             Description = 'Use during a Zava incident when nearby alerts or conflicting evidence require correlation. Review fired alerts, relevant disabled rules, Azure Service Health, and telemetry to determine whether conditions share a mechanism or should remain independent.'
             Tools = @(
