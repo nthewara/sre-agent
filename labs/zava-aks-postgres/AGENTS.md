@@ -36,6 +36,7 @@ These are gotchas for someone editing this repo's IaC or Bicep — they're *not*
 - **Scenario 3 load runs as a Kubernetes Job.** `break-db-perf.ps1` renders `k8s/jobs/load-categories.yaml`; `fix-db-perf.ps1` removes the Job after restoring the indexes.
 - **Scenario 5 (`break-compound.ps1`) is a bounded correlation proof of concept.** It overlaps Scenario 3 and Scenario 4 by 90 seconds so the sample can compare nearby alerts against dependency, deployment, and database telemetry. The causes are intentionally independent. Run the database-performance fault first because it restarts the API deployment; the bad-deploy revision must remain the latest rollout for the application investigation. Do not present this scenario as a comprehensive correlation benchmark or a guaranteed model outcome.
 - **Skills are split by incident domain.** Keep database, performance, application, general triage, proactive health, and correlation procedures separate. Domain skills may use the read-only correlation skill when needed.
+- **Daily reporting is separate from proactive incident checks.** `daily-health-report` always returns a read-only report for the last 24 hours and current 15 minutes, with no remediation or delegation. Keep `proactive-health-check` unchanged: on-demand, 15-minute checks, silent when healthy, domain-skill handoffs for anomalies. Synchronizing the seventh skill does not create a scheduled task or dedicated custom responder, or grant notification consent; operators opt in through [the daily health guide](docs/daily-health-check.md). Narrow tools and Review mode do not remove the existing agent's privileged RBAC.
 - **Alert `description` strings in `monitoring.bicep` are agent-readable payload, not cosmetic Bicep strings.** Azure Monitor includes the alert description in the incident context the SRE Agent reads. They MUST stay symptom-only — never re-add "Likely cause: …", "Remediation: …", "(Scenario N)", or any specific resource name (table, index, NetworkPolicy) the agent could pattern-match instead of diagnosing. The descriptions describe what was observed; the runbook + KB explain how to investigate.
 - **Correlation guidance is split between global instructions and an on-demand skill.** `sre-config/custom-instructions.md` identifies when a wider review may be useful; `sre-config/skills/incident-correlation.md` contains the read-only procedure. Keep alert descriptions symptom-focused and avoid duplicating correlation instructions across response plans.
 - **Correlation requires mechanism evidence.** Alert timestamps identify candidate overlap but not causal order. Establish onset from raw telemetry and compare dependency targets, result codes, deployment history, and PostgreSQL metrics before assigning a shared cause.
@@ -71,7 +72,7 @@ For agents that support Copilot CLI's project-local skills under `.github/skills
 
 The deployment is deliberately two phase. ARM/Bicep creates the agent and
 connectors. `scripts/setup-sre-agent.ps1` then uses an Entra token for audience
-`https://azuresre.dev` to synchronize the six skills and four incident filters /
+`https://azuresre.dev` to synchronize the seven skills and four incident filters /
 response plans, knowledge files, Microsoft Learn MCP tool enablement, and
 agent-global custom instructions.
 
@@ -80,6 +81,13 @@ Do not reintroduce `Microsoft.App/agents/skills` or
 Those extension types are restricted to internal tenants. Keep their source in
 `sre-config/agent-extensions.psd1` and `sre-config/skills/`; PUTs are idempotent,
 bounded, and required, so post-provision must fail when synchronization fails.
+
+Re-running setup against an existing agent synchronizes all repository-managed
+configuration, not one selected skill. Use source that matches the deployed
+environment and review potential overwrites of portal customizations. A
+reporting-skill update alone does not require a Bicep/workload redeployment.
+Scheduled tasks, dedicated custom responders, and notification consent remain
+operator-managed; do not invent ARM children or undocumented scheduling schemas.
 
 The source of truth for custom instructions is
 [`sre-config/custom-instructions.md`](sre-config/custom-instructions.md). Keep

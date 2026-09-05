@@ -39,6 +39,20 @@ deployment if the required skills or response plans cannot be synchronized.
 | **Telemetry access** | App Insights, Log Analytics, and Azure Monitor exposed via **connectors** |
 | **Demo Scenarios** | 5 break/fix scenarios with scripts |
 
+### Optional daily health report
+
+[Set up the daily health-report workflow](docs/daily-health-check.md) to have a
+dedicated custom agent summarize the last 24 hours and current 15-minute health
+in a fresh Markdown thread. The separate `daily-health-report` skill is
+read-only and always reports; `proactive-health-check` remains an on-demand
+check that is silent when healthy and can hand off to remediation.
+
+Synchronizing the repository adds the skill, **not** a scheduled task or custom
+responder. Create those explicitly in the SRE Agent portal, start in Review
+mode, and grant notification consent separately only if wanted. Existing
+agents do not need a workload redeployment, but the setup script synchronizes
+all repository-managed agent configuration, not just this skill.
+
 ## Architecture
 
 ```
@@ -168,7 +182,7 @@ Agent configuration is declarative but intentionally split across two APIs:
 - **ARM/Bicep** in `infra/modules/sre-agent.bicep` creates the agent, identities,
   autonomous mode, Azure Monitor incident binding, and connectors.
 - **SRE Agent data plane** in `scripts/setup-sre-agent.ps1` idempotently PUTs the
-  six skills and four response plans from `sre-config/agent-extensions.psd1` and
+  seven skills and four response plans from `sre-config/agent-extensions.psd1` and
   `sre-config/skills/`, then synchronizes knowledge files, custom instructions,
   and Microsoft Learn MCP tool enablement.
 
@@ -362,7 +376,7 @@ zava-aks-postgres/
 ├── infra/                        # Bicep (AKS, PostgreSQL, SRE Agent, monitoring)
 ├── src/api/                      # Express.js API
 ├── src/storefront/               # Zava Athletic storefront UI
-├── docs/                         # Architecture and access explainers + images
+├── docs/                         # Architecture, access, daily reporting + images
 ├── k8s/                          # Kubernetes manifests (${VAR} substitution)
 ├── scripts/                 # azd lifecycle hooks + shared helper
 │   ├── _aks-helpers.ps1          #   Invoke-AksCommand wrapper (REST fallback)

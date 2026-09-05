@@ -7,8 +7,8 @@
       - ARM/Bicep creates the agent, identities, role assignments, incident
         platform, and connectors.
       - This script synchronizes public-tenant agent extensions through the SRE
-        Agent data-plane API, including the required six skills and four incident
-        filters / response plans.
+        Agent data-plane API, including the required skills and incident filters /
+        response plans declared in the manifest.
 
     This script also owns the other data-plane-only configuration:
       - Knowledge file upload (Builder UI > Knowledge sources)
